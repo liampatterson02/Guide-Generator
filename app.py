@@ -28,62 +28,74 @@ CHANNELS = [
 def scrape_fixtures(url):
     """
     Scrapes fixtures from a SPFL fixtures page by processing the plain text.
-    The method expects the following three-line pattern:
+    The expected pattern is:
       • A date line (e.g. "Saturday 15th February 2025")
-      • A time line (starting with "- ", e.g. "- 15:00")
-      • A teams line (starting with "- ", e.g. "- Celtic v Dundee United")
-    It removes ordinal suffixes from the date before combining it with the time.
+      • A time line starting with "- " (e.g. "- 15:00")
+      • A teams line starting with "- " (e.g. "- Celtic v Dundee United")
+    Ordinal suffixes are removed from the date before combining with the time.
     """
     fixtures = []
+    # Use a common browser user-agent to avoid potential blocking
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
     try:
-        response = requests.get(url)
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
-    except Exception:
+    except Exception as e:
+        print(f"Error accessing {url}: {e}")
         return fixtures
 
     soup = BeautifulSoup(response.content, 'lxml')
-    # Extract lines of text from the page
-    lines = soup.get_text(separator="\n").splitlines()
-    # Remove extra whitespace and blank lines
-    lines = [line.strip() for line in lines if line.strip()]
+    # Extract all non-empty lines from the page's text
+    lines = [line.strip() for line in soup.get_text(separator="\n").splitlines() if line.strip()]
 
-    # Regex pattern to match a date string e.g. "Saturday 15th February 2025"
-    date_pattern = re.compile(r'^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4}$')
-    
+    # Regex pattern to match a date string, e.g. "Saturday 15th February 2025"
+    date_pattern = re.compile(
+        r'^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s+\d{4}$'
+    )
     i = 0
     while i < len(lines) - 2:
+        # Look for a date line matching the expected pattern
         if date_pattern.match(lines[i]):
             try:
-                # Expected next line: time prefixed with "- "
-                time_line = lines[i+1]
-                if not time_line.startswith("- "):
+                # Expect the next two lines to contain time and teams (both prefixed by "- ")
+                time_line = lines[i + 1]
+                teams_line = lines[i + 2]
+                if not (time_line.startswith("- ") and teams_line.startswith("- ")):
                     i += 1
                     continue
+
                 time_str = time_line[2:].strip()
-                
-                # Expected following line: teams prefixed with "- "
-                teams_line = lines[i+2]
-                if not teams_line.startswith("- "):
-                    i += 1
-                    continue
                 teams_str = teams_line[2:].strip()
-                
-                # Remove suffixes like 'th', 'st', 'nd', 'rd' from the date
+
+                # Remove ordinal suffixes (st, nd, rd, th) from the date string
                 clean_date = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', lines[i])
                 dt_str = f"{clean_date} {time_str}"
                 fixture_date = datetime.strptime(dt_str, "%A %d %B %Y %H:%M")
-                fixtures.append({'date': fixture_date, 'teams': teams_str})
+                fixtures.append({
+                    'date': fixture_date,
+                    'teams': teams_str
+                })
+                # Skip ahead past these three lines
                 i += 3
                 continue
-            except Exception:
+            except Exception as e:
+                print(f"Error parsing fixture block starting at line {i}: {e}")
                 i += 1
         else:
             i += 1
+
+    # Debug: print the fixtures found
+    print(f"Scraped {len(fixtures)} fixtures from {url}")
+    for fx in fixtures:
+        print(f"  - {fx['date']} : {fx['teams']}")
+
     return fixtures
 
 def filter_next_two_weeks(fixtures):
     """
-    Returns only fixtures that fall within the next 14 days.
+    Returns only fixtures scheduled from now up to 14 days ahead.
     """
     now = datetime.now()
     two_weeks = now + timedelta(days=14)
@@ -92,9 +104,9 @@ def filter_next_two_weeks(fixtures):
 def generate_tv_guide(fixtures):
     """
     Generates an XML TV guide.
-    For each channel (e.g. "Celtic TV"), the app checks if any fixture's teams value (case-insensitive)
-    contains the corresponding team name (i.e. "Celtic"). If fixtures exist, they are added in order;
-    if not, a blank fixture listing is added.
+    For each channel, it adds a fixture element for any fixture whose teams text (lowercased)
+    contains the channel's key (channel name without " TV"). If no fixture is found, a blank fixture is added.
+    The XML is saved to the absolute path defined in GUIDE_XML.
     """
     root = ET.Element('TVGuide')
     fixtures = filter_next_two_weeks(fixtures)
@@ -107,44 +119,4 @@ def generate_tv_guide(fixtures):
             for fx in sorted(channel_fixtures, key=lambda f: f['date']):
                 fixture_element = ET.SubElement(channel_element, 'Fixture')
                 ET.SubElement(fixture_element, 'Date').text = fx['date'].strftime('%Y-%m-%d %H:%M')
-                ET.SubElement(fixture_element, 'Teams').text = fx['teams']
-        else:
-            ET.SubElement(channel_element, 'Fixture', status='blank')
-    
-    tree = ET.ElementTree(root)
-    tree.write(GUIDE_XML, encoding='utf-8', xml_declaration=True)
-
-def update_tv_guide():
-    """
-    In a background thread the app continuously:
-      • Scrapes fixtures from both the Premiership and Championship pages,
-      • Generates the TV guide XML,
-      • Then waits 24 hours before repeating.
-    """
-    while True:
-        all_fixtures = scrape_fixtures(PREMIERSHIP_URL) + scrape_fixtures(CHAMPIONSHIP_URL)
-        generate_tv_guide(all_fixtures)
-        time.sleep(86400)  # 24 hours
-
-@app.route('/guide.xml')
-@app.route('/tvguide.xml')
-def serve_guide():
-    """
-    Serves the generated TV guide XML.
-    If the guide file is missing, it creates a default one with blank fixtures.
-    """
-    if not os.path.exists(GUIDE_XML):
-        generate_tv_guide([])
-    return send_file(GUIDE_XML, mimetype='application/xml')
-
-if __name__ == '__main__':
-    # Pre-generate guide once on startup
-    all_fixtures = scrape_fixtures(PREMIERSHIP_URL) + scrape_fixtures(CHAMPIONSHIP_URL)
-    generate_tv_guide(all_fixtures)
-    
-    # Start the background updater thread
-    update_thread = threading.Thread(target=update_tv_guide, daemon=True)
-    update_thread.start()
-    
-    # Run the Flask server on port 5000 (accessible at /guide.xml or /tvguide.xml)
-    app.run(host='0.0.0.0', port=5000)
+                ET.SubElement
