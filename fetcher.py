@@ -20,11 +20,19 @@ def fetch_fixtures():
 
     logging.info(f"Fetching fixtures from: {url}")
     response = requests.get(url)
+
     if response.status_code != 200:
         logging.error(f"Error fetching data from SportMonks: "
                       f"{response.status_code} - {response.text}")
         return []
 
-    data = response.json().get("data", [])
-    logging.info(f"Fetched {len(data)} fixtures for league {LEAGUE_ID}")
-    return data
+    try:
+        data = response.json()
+        logging.info(f"Raw API response: {data}")  # LOG THE FULL RESPONSE
+    except Exception as e:
+        logging.error(f"Error parsing JSON: {e}")
+        return []
+
+    fixtures = data.get("data", [])
+    logging.info(f"Fetched {len(fixtures)} fixtures for league {LEAGUE_ID}")
+    return fixtures
