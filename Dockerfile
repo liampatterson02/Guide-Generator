@@ -1,17 +1,13 @@
-# Use Python base image
-FROM python:3.10
+FROM python:3.10-slim
 
-# Set the working directory
 WORKDIR /app
 
-# Copy application files
-COPY app.py /app/
+# Copy files
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install dependencies
-RUN pip install flask requests
+COPY . /app
 
-# Expose the port
 EXPOSE 5000
 
-# Start the application
 CMD ["python", "app.py"]

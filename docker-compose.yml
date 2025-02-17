@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  scottish-tv-guide:
+    image: liampatterson02/spfl-guide:latest
+    container_name: scottish-tv-guide
+    environment:
+      - SPORTMONKS_API_TOKEN=YOUR_API_TOKEN_HERE
+      - UPDATE_INTERVAL_MINUTES=30
+      - LEAGUE_IDS=501,99
+      - ENABLE_M3U=Yes
+    volumes:
+      - ./tvguide.log:/app/tvguide.log
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
